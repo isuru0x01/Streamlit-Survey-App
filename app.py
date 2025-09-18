@@ -9,7 +9,7 @@ import pandas as pd
 from dotenv import load_dotenv
 
 # gTTS for free text-to-speech
-from gTTS import *
+from gtts import gTTS
 
 # Hugging Face Hub
 from huggingface_hub import HfApi, hf_hub_download, HfFolder
