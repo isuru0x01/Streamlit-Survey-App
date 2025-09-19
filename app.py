@@ -2,14 +2,11 @@ import os
 import io
 import uuid
 from datetime import datetime
-import hashlib
+import json
 
 import streamlit as st
 import pandas as pd
 from dotenv import load_dotenv
-
-# gTTS for free text-to-speech
-from gtts import gTTS
 
 # Hugging Face Hub
 from huggingface_hub import HfApi, hf_hub_download, HfFolder
@@ -38,47 +35,50 @@ HfFolder.save_token(HF_TOKEN)
 st.set_page_config(page_title="Empathetic vs. Neutral AI Voice Study", page_icon="🎙", layout="centered")
 
 # ----------------------------------------------------
-# Voice Configuration for gTTS
+# Voice Configuration for Web Speech API
 # ----------------------------------------------------
 
-# Available gTTS voices with metadata
+# Available voices for Web Speech API (browser-dependent)
 VOICE_OPTIONS = {
-    "English (US) - Female": {
-        "lang": "en",
-        "tld": "us",
+    "Female Voice 1": {
+        "gender": "Female",
+        "accent": "American", 
+        "description": "Warm, friendly female voice",
+        "voice_name": "Google US English Female",
+        "rate": 1.0,
+        "pitch": 1.0
+    },
+    "Female Voice 2": {
+        "gender": "Female",
+        "accent": "British",
+        "description": "Professional British female voice",
+        "voice_name": "Google UK English Female", 
+        "rate": 1.0,
+        "pitch": 1.1
+    },
+    "Male Voice 1": {
+        "gender": "Male",
+        "accent": "American",
+        "description": "Clear, confident male voice",
+        "voice_name": "Google US English Male",
+        "rate": 1.0,
+        "pitch": 0.9
+    },
+    "Slow Empathetic": {
         "gender": "Female",
         "accent": "American",
-        "description": "Warm, friendly American female voice"
+        "description": "Slower, more caring pace for empathy",
+        "voice_name": "Google US English Female",
+        "rate": 0.8,
+        "pitch": 1.1
     },
-    "English (UK) - Female": {
-        "lang": "en",
-        "tld": "co.uk",
-        "gender": "Female", 
-        "accent": "British",
-        "description": "Professional British female voice"
-    },
-    "English (Australia) - Female": {
-        "lang": "en",
-        "tld": "com.au",
-        "gender": "Female",
-        "accent": "Australian", 
-        "description": "Casual Australian female voice"
-    },
-    "English (US) - Slow": {
-        "lang": "en",
-        "tld": "us",
-        "gender": "Neutral",
-        "accent": "American",
-        "description": "Slower, more deliberate American voice",
-        "slow": True
-    },
-    "English (UK) - Slow": {
-        "lang": "en", 
-        "tld": "co.uk",
-        "gender": "Neutral",
-        "accent": "British",
-        "description": "Slower, more measured British voice",
-        "slow": True
+    "Neutral Robotic": {
+        "gender": "Male", 
+        "accent": "Neutral",
+        "description": "Faster, monotone for neutral tone",
+        "voice_name": "Google US English Male",
+        "rate": 1.2,
+        "pitch": 0.8
     }
 }
 
@@ -92,74 +92,122 @@ def preprocess_text_for_tone(text, tone="neutral"):
         # Add pauses and softer language
         text = text.replace(".", "... ")
         text = text.replace(",", ", ")
-        # Add breathing cues
-        if "breath" in text.lower():
-            text = text.replace("breath", "slow, deep breath")
+        # Add breathing cues and gentler phrasing
+        text = text.replace("Take a slow breath", "Take a slow, deep breath")
+        text = text.replace("You're", "You are truly")
     elif tone == "neutral":
         # Make more robotic/clinical
         text = text.replace("I'm", "I am")
         text = text.replace("you're", "you are") 
         text = text.replace("it's", "it is")
-        # Remove contractions for more formal tone
+        text = text.replace("can't", "cannot")
+        # Remove emotional language
+        text = text.replace("glad", "pleased")
+        text = text.replace("wonderful", "acceptable")
         
     return text
 
-def generate_audio_gtts(text, voice_config, tone="neutral"):
-    """Generate audio using gTTS and return as BytesIO object"""
-    try:
-        # Preprocess text based on tone
-        processed_text = preprocess_text_for_tone(text, tone)
-        
-        # Create gTTS object
-        tts = gTTS(
-            text=processed_text,
-            lang=voice_config["lang"],
-            tld=voice_config.get("tld", "com"),
-            slow=voice_config.get("slow", False)
-        )
-        
-        # Generate audio in memory
-        audio_buffer = io.BytesIO()
-        tts.write_to_fp(audio_buffer)
-        audio_buffer.seek(0)
-        
-        return audio_buffer
-        
-    except Exception as e:
-        st.error(f"Audio generation failed: {e}")
-        return None
+def create_speech_html(text, voice_config, tone="neutral", unique_id="speech"):
+    """Create HTML with JavaScript for Web Speech API"""
+    processed_text = preprocess_text_for_tone(text, tone)
+    
+    # Escape text for JavaScript
+    safe_text = processed_text.replace("'", "\\'").replace('"', '\\"').replace('\n', '\\n')
+    
+    html_code = f"""
+    <div style="margin: 10px 0;">
+        <button id="play_{unique_id}" onclick="speakText_{unique_id}()" 
+                style="background-color: #ff4b4b; color: white; border: none; 
+                       padding: 10px 20px; border-radius: 5px; cursor: pointer;
+                       font-size: 16px;">
+            ▶ Play Audio
+        </button>
+        <button id="stop_{unique_id}" onclick="stopSpeech_{unique_id}()" 
+                style="background-color: #666; color: white; border: none; 
+                       padding: 10px 20px; border-radius: 5px; cursor: pointer;
+                       font-size: 16px; margin-left: 10px;">
+            ⏹ Stop
+        </button>
+        <div id="status_{unique_id}" style="margin-top: 10px; font-style: italic; color: #666;"></div>
+    </div>
 
-def get_audio_cache_key(text, voice_name, tone):
-    """Generate cache key for audio"""
-    content = f"{text}_{voice_name}_{tone}"
-    return hashlib.md5(content.encode()).hexdigest()
-
-def play_voice(text, voice_name, tone="neutral"):
-    """Generate & play audio from gTTS with caching"""
-    if voice_name not in VOICE_OPTIONS:
-        st.error(f"Voice '{voice_name}' not found.")
-        return
+    <script>
+    let utterance_{unique_id} = null;
+    
+    function speakText_{unique_id}() {{
+        // Stop any current speech
+        if (window.speechSynthesis.speaking) {{
+            window.speechSynthesis.cancel();
+        }}
         
-    # Initialize audio cache in session state
-    if "audio_cache" not in st.session_state:
-        st.session_state.audio_cache = {}
+        // Check if speech synthesis is supported
+        if (!('speechSynthesis' in window)) {{
+            document.getElementById('status_{unique_id}').innerHTML = 
+                '<span style="color: red;">Speech synthesis not supported in this browser. Please try Chrome, Firefox, or Safari.</span>';
+            return;
+        }}
+        
+        const text = '{safe_text}';
+        utterance_{unique_id} = new SpeechSynthesisUtterance(text);
+        
+        // Configure voice settings
+        utterance_{unique_id}.rate = {voice_config['rate']};
+        utterance_{unique_id}.pitch = {voice_config['pitch']};
+        utterance_{unique_id}.volume = 1.0;
+        
+        // Try to find the specified voice
+        const voices = speechSynthesis.getVoices();
+        const targetVoice = voices.find(voice => 
+            voice.name.includes('{voice_config['voice_name'].split()[1]}') ||
+            voice.name.toLowerCase().includes('{voice_config['gender'].lower()}')
+        );
+        
+        if (targetVoice) {{
+            utterance_{unique_id}.voice = targetVoice;
+        }}
+        
+        // Event handlers
+        utterance_{unique_id}.onstart = function() {{
+            document.getElementById('status_{unique_id}').innerHTML = 
+                '<span style="color: green;">🔊 Playing audio...</span>';
+            document.getElementById('play_{unique_id}').disabled = true;
+        }};
+        
+        utterance_{unique_id}.onend = function() {{
+            document.getElementById('status_{unique_id}').innerHTML = 
+                '<span style="color: blue;">✓ Audio finished</span>';
+            document.getElementById('play_{unique_id}').disabled = false;
+        }};
+        
+        utterance_{unique_id}.onerror = function(event) {{
+            document.getElementById('status_{unique_id}').innerHTML = 
+                '<span style="color: red;">Error: ' + event.error + '</span>';
+            document.getElementById('play_{unique_id}').disabled = false;
+        }};
+        
+        // Speak the text
+        speechSynthesis.speak(utterance_{unique_id});
+    }}
     
-    # Check cache first
-    cache_key = get_audio_cache_key(text, voice_name, tone)
+    function stopSpeech_{unique_id}() {{
+        if (window.speechSynthesis.speaking) {{
+            window.speechSynthesis.cancel();
+            document.getElementById('status_{unique_id}').innerHTML = 
+                '<span style="color: orange;">⏹ Audio stopped</span>';
+            document.getElementById('play_{unique_id}').disabled = false;
+        }}
+    }}
     
-    if cache_key not in st.session_state.audio_cache:
-        with st.spinner("Generating audio..."):
-            voice_config = VOICE_OPTIONS[voice_name]
-            audio_buffer = generate_audio_gtts(text, voice_config, tone)
-            
-            if audio_buffer:
-                st.session_state.audio_cache[cache_key] = audio_buffer.getvalue()
-            else:
-                return
+    // Load voices when available
+    if (speechSynthesis.onvoiceschanged !== undefined) {{
+        speechSynthesis.onvoiceschanged = function() {{
+            // Voices loaded
+        }};
+    }}
+    </script>
+    """
     
-    # Play cached audio
-    audio_data = st.session_state.audio_cache[cache_key]
-    st.audio(io.BytesIO(audio_data), format="audio/mp3")
+    return html_code
 
 def load_existing_hf_csv(repo_id: str, path_in_repo: str) -> pd.DataFrame:
     try:
@@ -290,6 +338,10 @@ research purposes. No personal identifiers (names, etc.) will be linked to your
 responses.""")
     st.write("""By continuing the survey, you acknowledge that you understand the information 
 above and agree to participate. """)
+    
+    # Browser compatibility note
+    st.info("📝 **Note**: This study uses your browser's built-in text-to-speech feature. For the best experience, please use Chrome, Firefox, Safari, or Edge. Make sure your device volume is turned on.")
+    
     consent = st.checkbox("I agree to participate.")
     if st.button("Continue ➡"):
         if consent:
@@ -425,9 +477,10 @@ You deserve kindness, and I'm proud of you for taking this moment for yourself."
         key="emp_script_text"
     )
 
-    # Play button
-    if st.button("▶ Play Empathetic Voice", key="emp_play_btn"):
-        play_voice(emp_script, emp_voice_name, tone="empathetic")
+    # Generate and display speech interface
+    voice_config = VOICE_OPTIONS[emp_voice_name]
+    speech_html = create_speech_html(emp_script, voice_config, tone="empathetic", unique_id="empathetic")
+    st.markdown(speech_html, unsafe_allow_html=True)
 
     st.subheader("AI Voice Interaction Questions (Empathetic Voice)")
     for i, (key, question) in enumerate(empathetic_questions.items(), start=11):
@@ -475,9 +528,10 @@ Your participation is valuable, and your responses will help us better understan
         key="neu_script_text"
     )
 
-    # Play button
-    if st.button("▶ Play Neutral Voice", key="neu_play_btn"):
-        play_voice(neu_script, neu_voice_name, tone="neutral")
+    # Generate and display speech interface
+    voice_config = VOICE_OPTIONS[neu_voice_name]
+    speech_html = create_speech_html(neu_script, voice_config, tone="neutral", unique_id="neutral")
+    st.markdown(speech_html, unsafe_allow_html=True)
 
     st.subheader("AI Voice Interaction Questions (Neutral Voice)")
     for i, (key, question) in enumerate(neutral_questions.items(), start=20):
@@ -489,7 +543,7 @@ Your participation is valuable, and your responses will help us better understan
     st.session_state["neu_state_anxiety"] = st.radio(
         "",
         [1, 2, 3, 4, 5],
-        format_func=lambda x: f"{x} = {['Not at all anxious','Slightly anxious','Moderately anxious','Very anxious','Extremely anxious'][x-1]}",
+        format_func=lambda x: f"{x} = {['Not at all anxious','Slightly anxious','Moderately anxious','Very anxious','Very anxious','Extremely anxious'][x-1]}",
         key="neu_anxiety"
     )
 
