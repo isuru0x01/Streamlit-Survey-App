@@ -5,6 +5,7 @@ from datetime import datetime
 import json
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 from dotenv import load_dotenv
 
@@ -111,99 +112,187 @@ def create_speech_html(text, voice_config, tone="neutral", unique_id="speech"):
     """Create HTML with JavaScript for Web Speech API"""
     processed_text = preprocess_text_for_tone(text, tone)
     
-    # Escape text for JavaScript
-    safe_text = processed_text.replace("'", "\\'").replace('"', '\\"').replace('\n', '\\n')
+    # Escape text for JavaScript - more robust escaping
+    safe_text = processed_text.replace('\\', '\\\\').replace("'", "\\'").replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
     
     html_code = f"""
-    <div style="margin: 10px 0;">
+    <div style="margin: 10px 0; padding: 15px; border: 1px solid #ddd; border-radius: 8px; background-color: #f9f9f9;">
+        <div style="margin-bottom: 10px;">
+            <strong>🎙️ Audio Controls:</strong>
+        </div>
         <button id="play_{unique_id}" onclick="speakText_{unique_id}()" 
                 style="background-color: #ff4b4b; color: white; border: none; 
-                       padding: 10px 20px; border-radius: 5px; cursor: pointer;
-                       font-size: 16px;">
+                       padding: 12px 24px; border-radius: 6px; cursor: pointer;
+                       font-size: 16px; font-weight: bold; margin-right: 10px;">
             ▶ Play Audio
         </button>
         <button id="stop_{unique_id}" onclick="stopSpeech_{unique_id}()" 
                 style="background-color: #666; color: white; border: none; 
-                       padding: 10px 20px; border-radius: 5px; cursor: pointer;
-                       font-size: 16px; margin-left: 10px;">
+                       padding: 12px 24px; border-radius: 6px; cursor: pointer;
+                       font-size: 16px; margin-right: 10px;">
             ⏹ Stop
         </button>
-        <div id="status_{unique_id}" style="margin-top: 10px; font-style: italic; color: #666;"></div>
+        <button id="test_{unique_id}" onclick="testSpeech_{unique_id}()" 
+                style="background-color: #28a745; color: white; border: none; 
+                       padding: 12px 24px; border-radius: 6px; cursor: pointer;
+                       font-size: 16px;">
+            🔧 Test Voice
+        </button>
+        <div id="status_{unique_id}" style="margin-top: 15px; padding: 10px; font-style: italic; color: #666; background-color: #fff; border-radius: 4px; border: 1px solid #eee;">
+            Ready to play audio...
+        </div>
+        <div id="debug_{unique_id}" style="margin-top: 10px; font-size: 12px; color: #888;"></div>
     </div>
 
     <script>
-    let utterance_{unique_id} = null;
-    
-    function speakText_{unique_id}() {{
-        // Stop any current speech
-        if (window.speechSynthesis.speaking) {{
-            window.speechSynthesis.cancel();
+    (function() {{
+        let utterance_{unique_id} = null;
+        let voices_{unique_id} = [];
+        
+        // Load voices and update status
+        function loadVoices_{unique_id}() {{
+            voices_{unique_id} = speechSynthesis.getVoices();
+            const debugEl = document.getElementById('debug_{unique_id}');
+            if (debugEl) {{
+                debugEl.innerHTML = `Available voices: ${{voices_{unique_id}.length}} | Browser: ${{navigator.userAgent.split(' ').slice(-1)[0]}}`;
+            }}
         }}
         
-        // Check if speech synthesis is supported
-        if (!('speechSynthesis' in window)) {{
-            document.getElementById('status_{unique_id}').innerHTML = 
-                '<span style="color: red;">Speech synthesis not supported in this browser. Please try Chrome, Firefox, or Safari.</span>';
-            return;
+        // Test speech with simple text
+        function testSpeech_{unique_id}() {{
+            const statusEl = document.getElementById('status_{unique_id}');
+            
+            if (!('speechSynthesis' in window)) {{
+                statusEl.innerHTML = '<span style="color: red;">❌ Speech synthesis not supported in this browser.</span>';
+                return;
+            }}
+            
+            statusEl.innerHTML = '<span style="color: blue;">🧪 Testing voice...</span>';
+            
+            const testUtterance = new SpeechSynthesisUtterance("Testing voice. This is a test.");
+            testUtterance.rate = 1.0;
+            testUtterance.pitch = 1.0;
+            testUtterance.volume = 1.0;
+            
+            testUtterance.onstart = function() {{
+                statusEl.innerHTML = '<span style="color: green;">✅ Voice test working! You should hear audio.</span>';
+            }};
+            
+            testUtterance.onend = function() {{
+                statusEl.innerHTML = '<span style="color: blue;">✅ Voice test completed successfully.</span>';
+            }};
+            
+            testUtterance.onerror = function(event) {{
+                statusEl.innerHTML = `<span style="color: red;">❌ Voice test failed: ${{event.error}}</span>`;
+            }};
+            
+            speechSynthesis.speak(testUtterance);
         }}
         
-        const text = '{safe_text}';
-        utterance_{unique_id} = new SpeechSynthesisUtterance(text);
-        
-        // Configure voice settings
-        utterance_{unique_id}.rate = {voice_config['rate']};
-        utterance_{unique_id}.pitch = {voice_config['pitch']};
-        utterance_{unique_id}.volume = 1.0;
-        
-        // Try to find the specified voice
-        const voices = speechSynthesis.getVoices();
-        const targetVoice = voices.find(voice => 
-            voice.name.includes('{voice_config['voice_name'].split()[1]}') ||
-            voice.name.toLowerCase().includes('{voice_config['gender'].lower()}')
-        );
-        
-        if (targetVoice) {{
-            utterance_{unique_id}.voice = targetVoice;
+        // Main speech function
+        function speakText_{unique_id}() {{
+            const statusEl = document.getElementById('status_{unique_id}');
+            const playBtn = document.getElementById('play_{unique_id}');
+            
+            // Stop any current speech
+            if (window.speechSynthesis.speaking) {{
+                window.speechSynthesis.cancel();
+            }}
+            
+            // Check browser support
+            if (!('speechSynthesis' in window)) {{
+                statusEl.innerHTML = '<span style="color: red;">❌ Speech synthesis not supported. Try Chrome, Firefox, Safari, or Edge.</span>';
+                return;
+            }}
+            
+            statusEl.innerHTML = '<span style="color: blue;">🎵 Preparing audio...</span>';
+            
+            const text = '{safe_text}';
+            if (!text || text.trim() === '') {{
+                statusEl.innerHTML = '<span style="color: red;">❌ No text to speak.</span>';
+                return;
+            }}
+            
+            utterance_{unique_id} = new SpeechSynthesisUtterance(text);
+            
+            // Configure voice settings
+            utterance_{unique_id}.rate = {voice_config['rate']};
+            utterance_{unique_id}.pitch = {voice_config['pitch']};
+            utterance_{unique_id}.volume = 1.0;
+            
+            // Try to set a specific voice
+            if (voices_{unique_id}.length > 0) {{
+                // Look for female/male voices based on config
+                const genderMatch = voices_{unique_id}.find(voice => 
+                    voice.name.toLowerCase().includes('{voice_config['gender'].lower()}') ||
+                    voice.name.toLowerCase().includes('female') && '{voice_config['gender'].lower()}' === 'female' ||
+                    voice.name.toLowerCase().includes('male') && '{voice_config['gender'].lower()}' === 'male'
+                );
+                
+                if (genderMatch) {{
+                    utterance_{unique_id}.voice = genderMatch;
+                }} else if (voices_{unique_id}[0]) {{
+                    utterance_{unique_id}.voice = voices_{unique_id}[0];
+                }}
+            }}
+            
+            // Event handlers
+            utterance_{unique_id}.onstart = function() {{
+                statusEl.innerHTML = '<span style="color: green;">🔊 Playing audio... (Volume up!)</span>';
+                playBtn.disabled = true;
+                playBtn.style.opacity = '0.6';
+            }};
+            
+            utterance_{unique_id}.onend = function() {{
+                statusEl.innerHTML = '<span style="color: blue;">✅ Audio finished playing.</span>';
+                playBtn.disabled = false;
+                playBtn.style.opacity = '1.0';
+            }};
+            
+            utterance_{unique_id}.onerror = function(event) {{
+                statusEl.innerHTML = `<span style="color: red;">❌ Audio error: ${{event.error}}. Try the Test Voice button first.</span>`;
+                playBtn.disabled = false;
+                playBtn.style.opacity = '1.0';
+            }};
+            
+            // Add a small delay to ensure everything is ready
+            setTimeout(function() {{
+                try {{
+                    speechSynthesis.speak(utterance_{unique_id});
+                    statusEl.innerHTML = '<span style="color: orange;">🎵 Audio starting... (Check your volume!)</span>';
+                }} catch (error) {{
+                    statusEl.innerHTML = `<span style="color: red;">❌ Failed to start audio: ${{error.message}}</span>`;
+                    playBtn.disabled = false;
+                    playBtn.style.opacity = '1.0';
+                }}
+            }}, 100);
         }}
         
-        // Event handlers
-        utterance_{unique_id}.onstart = function() {{
-            document.getElementById('status_{unique_id}').innerHTML = 
-                '<span style="color: green;">🔊 Playing audio...</span>';
-            document.getElementById('play_{unique_id}').disabled = true;
-        }};
-        
-        utterance_{unique_id}.onend = function() {{
-            document.getElementById('status_{unique_id}').innerHTML = 
-                '<span style="color: blue;">✓ Audio finished</span>';
-            document.getElementById('play_{unique_id}').disabled = false;
-        }};
-        
-        utterance_{unique_id}.onerror = function(event) {{
-            document.getElementById('status_{unique_id}').innerHTML = 
-                '<span style="color: red;">Error: ' + event.error + '</span>';
-            document.getElementById('play_{unique_id}').disabled = false;
-        }};
-        
-        // Speak the text
-        speechSynthesis.speak(utterance_{unique_id});
-    }}
-    
-    function stopSpeech_{unique_id}() {{
-        if (window.speechSynthesis.speaking) {{
-            window.speechSynthesis.cancel();
-            document.getElementById('status_{unique_id}').innerHTML = 
-                '<span style="color: orange;">⏹ Audio stopped</span>';
-            document.getElementById('play_{unique_id}').disabled = false;
+        function stopSpeech_{unique_id}() {{
+            if (window.speechSynthesis.speaking) {{
+                window.speechSynthesis.cancel();
+                document.getElementById('status_{unique_id}').innerHTML = 
+                    '<span style="color: orange;">⏹ Audio stopped.</span>';
+                const playBtn = document.getElementById('play_{unique_id}');
+                playBtn.disabled = false;
+                playBtn.style.opacity = '1.0';
+            }}
         }}
-    }}
-    
-    // Load voices when available
-    if (speechSynthesis.onvoiceschanged !== undefined) {{
-        speechSynthesis.onvoiceschanged = function() {{
-            // Voices loaded
-        }};
-    }}
+        
+        // Make functions globally accessible
+        window.speakText_{unique_id} = speakText_{unique_id};
+        window.stopSpeech_{unique_id} = stopSpeech_{unique_id};
+        window.testSpeech_{unique_id} = testSpeech_{unique_id};
+        
+        // Load voices immediately and on change
+        loadVoices_{unique_id}();
+        if (speechSynthesis.onvoiceschanged !== undefined) {{
+            speechSynthesis.onvoiceschanged = loadVoices_{unique_id};
+        }}
+        
+        // Also try loading voices after a delay (some browsers need this)
+        setTimeout(loadVoices_{unique_id}, 1000);
+    }})();
     </script>
     """
     
@@ -480,7 +569,7 @@ You deserve kindness, and I'm proud of you for taking this moment for yourself."
     # Generate and display speech interface
     voice_config = VOICE_OPTIONS[emp_voice_name]
     speech_html = create_speech_html(emp_script, voice_config, tone="empathetic", unique_id="empathetic")
-    st.markdown(speech_html, unsafe_allow_html=True)
+    components.html(speech_html, height=300, scrolling=False)
 
     st.subheader("AI Voice Interaction Questions (Empathetic Voice)")
     for i, (key, question) in enumerate(empathetic_questions.items(), start=11):
@@ -531,7 +620,7 @@ Your participation is valuable, and your responses will help us better understan
     # Generate and display speech interface
     voice_config = VOICE_OPTIONS[neu_voice_name]
     speech_html = create_speech_html(neu_script, voice_config, tone="neutral", unique_id="neutral")
-    st.markdown(speech_html, unsafe_allow_html=True)
+    components.html(speech_html, height=300, scrolling=False)
 
     st.subheader("AI Voice Interaction Questions (Neutral Voice)")
     for i, (key, question) in enumerate(neutral_questions.items(), start=20):
